@@ -1,3 +1,16 @@
+"""
+UI module - centralisasi presentation logic.
+
+Pakai library `rich` untuk:
+- Pretty tables untuk query results
+- Syntax-highlighted SQL
+- Spinner / progress indicator
+- Markdown rendering
+- Color-coded panels
+
+Filosofi: agent.py focus ke logic, ui.py focus ke tampilan.
+Pisahkan concerns supaya code lebih maintainable.
+"""
 import json
 from typing import Any
 
@@ -7,16 +20,23 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.markdown import Markdown
 from rich.text import Text
+from rich.live import Live
+from rich.spinner import Spinner
 from rich.align import Align
 
 
+# Single console instance dipakai di seluruh app
 console = Console()
 
 
+# ============================================================
+# WELCOME SCREEN
+# ============================================================
 def print_welcome():
-    title = Text("BI AGENT", style="bold cyan", justify="center")
+    """Banner aplikasi yang eye-catching."""
+    title = Text("🤖 BI AGENT", style="bold cyan", justify="center")
     subtitle = Text(
-        "E-commerce Database Assistant",
+        "Database E-commerce Assistant",
         style="dim",
         justify="center"
     )
@@ -29,38 +49,51 @@ def print_welcome():
     console.print(welcome_panel)
 
     help_text = Text()
-    help_text.append("Example questions:\n", style="bold yellow")
-    help_text.append("   - What is the total revenue for April 2026?\n", style="dim")
-    help_text.append("   - Which products sell best in the Fashion category?\n", style="dim")
-    help_text.append("   - Who are the top 5 customers by spend?\n", style="dim")
-    help_text.append("\nCommands:\n", style="bold yellow")
+    help_text.append("💡 Contoh pertanyaan:\n", style="bold yellow")
+    help_text.append("   • Berapa total revenue bulan April 2026?\n", style="dim")
+    help_text.append("   • Produk apa yang paling laris di kategori Fashion?\n", style="dim")
+    help_text.append("   • Siapa 5 customer dengan pembelian terbesar?\n", style="dim")
+    help_text.append("\n⚙️  Perintah:\n", style="bold yellow")
     help_text.append("   /reset   ", style="cyan")
-    help_text.append("- start a new conversation\n", style="dim")
+    help_text.append("- mulai conversation baru\n", style="dim")
     help_text.append("   /stats   ", style="cyan")
-    help_text.append("- show token usage\n", style="dim")
+    help_text.append("- lihat token usage\n", style="dim")
     help_text.append("   /logs    ", style="cyan")
-    help_text.append("- show log file path\n", style="dim")
+    help_text.append("- tampilkan path file log\n", style="dim")
     help_text.append("   /quit    ", style="cyan")
-    help_text.append("- exit", style="dim")
+    help_text.append("- keluar", style="dim")
 
     console.print(help_text)
     console.print()
 
 
+# ============================================================
+# USER INPUT PROMPT
+# ============================================================
 def prompt_user() -> str:
+    """Tampilkan prompt input yang konsisten."""
     console.print()
-    return console.input("[bold green]You:[/bold green] ").strip()
+    return console.input("[bold green]💬 Kamu:[/bold green] ").strip()
 
 
+# ============================================================
+# ITERATION INDICATOR
+# ============================================================
 def print_iteration(iteration: int):
+    """Print header untuk iterasi agent."""
     console.print(
-        f"\n[dim]--- Iteration {iteration} ---[/dim]"
+        f"\n[dim]─── Iterasi {iteration} ───[/dim]"
     )
 
 
+# ============================================================
+# TOOL CALL DISPLAY
+# ============================================================
 def print_tool_call(tool_name: str, arguments: dict):
+    """Tampilkan tool yang sedang dipanggil agent."""
     if tool_name == "execute_sql":
         sql = arguments.get("sql", "")
+        # Syntax-highlight SQL pakai rich
         syntax = Syntax(
             sql,
             "sql",
@@ -71,7 +104,7 @@ def print_tool_call(tool_name: str, arguments: dict):
         )
         panel = Panel(
             syntax,
-            title=f"[bold]{tool_name}[/bold]",
+            title=f"[bold]🔧 {tool_name}[/bold]",
             border_style="blue",
             padding=(0, 1),
         )
@@ -81,60 +114,101 @@ def print_tool_call(tool_name: str, arguments: dict):
         table = arguments.get("table", "")
         column = arguments.get("column", "")
         console.print(
-            f"[blue][bold]{tool_name}[/bold][/blue] "
-            f"-> inspecting [yellow]{table}.{column}[/yellow]"
+            f"[blue]🔍 [bold]{tool_name}[/bold][/blue] "
+            f"→ eksplorasi [yellow]{table}.{column}[/yellow]"
+        )
+
+    elif tool_name == "web_search":
+        query = arguments.get("query", "")
+        console.print(
+            f"[cyan]🌐 [bold]{tool_name}[/bold][/cyan] "
+            f"→ [yellow]\"{query}\"[/yellow]"
         )
 
     else:
+        # Generic display untuk tool lain di masa depan
         args_str = ", ".join(f"{k}={v}" for k, v in arguments.items())
-        console.print(f"[blue]{tool_name}({args_str})[/blue]")
+        console.print(f"[blue]🔧 {tool_name}({args_str})[/blue]")
 
 
+# ============================================================
+# TOOL RESULT DISPLAY
+# ============================================================
 def print_tool_result(result_json: str):
+    """Parse dan tampilkan hasil tool dengan pretty formatting."""
     try:
         result = json.loads(result_json)
     except json.JSONDecodeError:
-        console.print(f"[red]Result is not valid JSON[/red]")
+        console.print(f"[red]❌ Result tidak valid JSON[/red]")
         return
 
     if not result.get("success"):
+        # Error - tampilkan error + hint
         error_text = Text()
-        error_text.append("Error: ", style="bold red")
+        error_text.append("❌ Error: ", style="bold red")
         error_text.append(result.get("error", "unknown"), style="red")
 
         if result.get("hint"):
-            error_text.append("\nHint: ", style="bold yellow")
+            error_text.append("\n💡 Hint: ", style="bold yellow")
             error_text.append(result["hint"], style="yellow")
 
         console.print(Panel(error_text, border_style="red", padding=(0, 1)))
         return
 
+    # Success - kasus get_distinct_values
     if "distinct_values" in result:
         values = result["distinct_values"]
         total = result.get("total_distinct", len(values))
         console.print(
-            f"[green]OK[/green] Found [bold]{total}[/bold] distinct values: "
+            f"[green]✅[/green] Found [bold]{total}[/bold] distinct values: "
             f"[cyan]{values}[/cyan]"
         )
         return
 
+    # Success - kasus web_search (punya field 'results' & 'answer')
+    if "results" in result and "query" in result:
+        answer = result.get("answer")
+        sources = result.get("results", [])
+
+        web_text = Text()
+        if answer:
+            web_text.append("🌐 Web summary:\n", style="bold cyan")
+            web_text.append(answer[:600], style="default")
+            web_text.append("\n\n")
+        web_text.append(f"🔗 Sources ({len(sources)}):\n", style="bold")
+        for src in sources[:5]:
+            web_text.append(f"  • {src.get('title', 'untitled')}\n", style="cyan")
+            web_text.append(f"    {src.get('url', '')}\n", style="dim")
+
+        console.print(Panel(
+            web_text,
+            title="[bold cyan]🌐 web_search[/bold cyan]",
+            border_style="cyan",
+            padding=(0, 1),
+        ))
+        return
+
+    # Success - kasus execute_sql
     rows = result.get("rows", [])
     row_count = result.get("row_count", 0)
 
     if row_count == 0:
-        console.print("[green]OK[/green] [dim](no rows returned)[/dim]")
+        console.print("[green]✅[/green] [dim](no rows returned)[/dim]")
         return
 
+    # Render tabel
     table = _build_results_table(rows, result.get("columns", []))
     console.print(table)
 
-    info_text = f"[green]OK[/green] {row_count} row(s)"
+    # Info tambahan
+    info_text = f"[green]✅[/green] {row_count} row(s)"
     if result.get("note"):
-        info_text += f" - [yellow]{result['note']}[/yellow]"
+        info_text += f" — [yellow]{result['note']}[/yellow]"
     console.print(info_text)
 
 
 def _build_results_table(rows: list[dict], columns: list[str]) -> Table:
+    """Build pretty table dari list of dicts."""
     table = Table(
         show_header=True,
         header_style="bold magenta",
@@ -142,10 +216,13 @@ def _build_results_table(rows: list[dict], columns: list[str]) -> Table:
         padding=(0, 1),
     )
 
+    # Tentukan kolom dari first row kalau columns kosong
     if not columns and rows:
         columns = list(rows[0].keys())
 
     for col in columns:
+        # Heuristik: kolom yang namanya mengandung "id", "count",
+        # "total", "amount", "price", "qty" probably numerik → right align
         is_numeric = any(
             keyword in col.lower()
             for keyword in ["id", "count", "total", "amount",
@@ -154,7 +231,8 @@ def _build_results_table(rows: list[dict], columns: list[str]) -> Table:
         justify = "right" if is_numeric else "left"
         table.add_column(col, justify=justify, overflow="fold")
 
-    # LLM still receives up to 50 rows for reasoning; user sees 20 to avoid flooding the terminal
+    # Limit display ke 20 baris pertama biar tidak banjir terminal
+    # (LLM masih dapat 50 rows untuk reasoning, tapi user lihat 20)
     DISPLAY_LIMIT = 20
     for row in rows[:DISPLAY_LIMIT]:
         formatted_values = [_format_cell_value(row.get(col)) for col in columns]
@@ -163,14 +241,17 @@ def _build_results_table(rows: list[dict], columns: list[str]) -> Table:
     if len(rows) > DISPLAY_LIMIT:
         ellipsis = ["..."] * len(columns)
         table.add_row(*ellipsis, style="dim")
+        # Footer note akan dicetak terpisah
 
     return table
 
 
 def _format_cell_value(value: Any) -> str:
+    """Format value untuk display di tabel."""
     if value is None:
         return "[dim]NULL[/dim]"
 
+    # Format angka besar dengan separator
     if isinstance(value, int) and abs(value) >= 1000:
         return f"{value:,}".replace(",", ".")
 
@@ -179,31 +260,51 @@ def _format_cell_value(value: Any) -> str:
             return f"{value:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
         return f"{value:.2f}"
 
+    # String panjang dipotong untuk tampilan
     s = str(value)
     if len(s) > 60:
         return s[:57] + "..."
     return s
 
 
+# ============================================================
+# ASSISTANT FINAL ANSWER
+# ============================================================
 def print_assistant_answer(content: str):
+    """Render jawaban final agent sebagai markdown."""
     console.print()
+    # Render sebagai markdown supaya bold/list/code blocks tampil cantik
     md = Markdown(content)
     panel = Panel(
         md,
-        title="[bold cyan]Agent[/bold cyan]",
+        title="[bold cyan]🤖 Agent[/bold cyan]",
         border_style="cyan",
         padding=(1, 2),
     )
     console.print(panel)
 
 
+# ============================================================
+# SPINNER / LOADING INDICATOR
+# ============================================================
 def thinking_spinner(text: str = "Thinking..."):
+    """
+    Context manager yang menampilkan spinner saat agent processing.
+
+    Usage:
+        with thinking_spinner("Generating SQL..."):
+            response = api_call()
+    """
     return console.status(f"[cyan]{text}[/cyan]", spinner="dots")
 
 
+# ============================================================
+# STATS DISPLAY
+# ============================================================
 def print_stats(stats: dict):
+    """Tampilkan token usage stats dalam tabel kecil."""
     table = Table(
-        title="Session Stats",
+        title="📊 Session Stats",
         show_header=True,
         header_style="bold",
         border_style="dim",
@@ -220,30 +321,36 @@ def print_stats(stats: dict):
     console.print(table)
 
 
+# ============================================================
+# MESSAGES (info, success, error, warning)
+# ============================================================
 def info(message: str):
-    console.print(f"[cyan]{message}[/cyan]")
+    console.print(f"[cyan]ℹ️  {message}[/cyan]")
 
 
 def success(message: str):
-    console.print(f"[green]{message}[/green]")
+    console.print(f"[green]✅ {message}[/green]")
 
 
 def warning(message: str):
-    console.print(f"[yellow]{message}[/yellow]")
+    console.print(f"[yellow]⚠️  {message}[/yellow]")
 
 
 def error(message: str):
-    console.print(f"[red]{message}[/red]")
+    console.print(f"[red]❌ {message}[/red]")
 
 
 def dim(message: str):
     console.print(f"[dim]{message}[/dim]")
 
 
+# ============================================================
+# DEMO MODE - untuk test rich output tanpa LLM
+# ============================================================
 if __name__ == "__main__":
     print_welcome()
 
-    info("Demo mode - testing all UI components")
+    info("Demo mode - test semua komponen UI")
     console.print()
 
     print_iteration(1)
@@ -258,6 +365,7 @@ ORDER BY total_sold DESC
 LIMIT 5"""
     })
 
+    # Simulasi result
     fake_result = json.dumps({
         "success": True,
         "row_count": 5,
@@ -281,23 +389,25 @@ LIMIT 5"""
     })
     print_tool_result(fake_distinct)
 
+    # Simulasi error
     print_iteration(3)
     print_tool_call("execute_sql", {"sql": "SELECT * FROM customer LIMIT 1"})
     fake_error = json.dumps({
         "success": False,
         "error": "SQL Error: no such table: customer",
-        "hint": "Invalid table name. Available tables: customers, products, orders, order_items."
+        "hint": "Nama tabel salah. Tabel yang tersedia: customers, products, orders, order_items."
     })
     print_tool_result(fake_error)
 
+    # Final answer
     print_assistant_answer(
-        "**Top 5 best-selling products** (status completed):\n\n"
-        "1. Kabel Charger Type-C - 245 sold\n"
-        "2. Masker Wajah Sheet Mask - 198 sold\n"
-        "3. Keripik Singkong Original - 187 sold\n\n"
-        "Insight: `Elektronik` and `Kecantikan` categories dominate the top 5, "
-        "with **fast-moving consumer goods** (low price, high volume) "
-        "as the clearest pattern."
+        "**Top 5 produk terlaris** (status completed):\n\n"
+        "1. Kabel Charger Type-C — 245 terjual\n"
+        "2. Masker Wajah Sheet Mask — 198 terjual\n"
+        "3. Keripik Singkong Original — 187 terjual\n\n"
+        "Insight: Produk-produk kategori `Elektronik` dan `Kecantikan` "
+        "mendominasi top 5, dengan **fast-moving consumer goods** "
+        "(harga rendah, volume tinggi) sebagai pola yang paling jelas."
     )
 
     print_stats({

@@ -2,23 +2,23 @@
   <img src="assets/start.png" alt="BI Agent" width="800">
 </p>
 
-# BI Agent — Business Intelligence Assistant
+# BI Agent — Battery Research Assistant
 
-An LLM-powered CLI agent that answers business questions against an e-commerce database. The agent automatically generates SQL queries, executes them against a read-only SQLite database, and replies in clean, formatted English.
+An LLM-powered CLI agent that answers research questions about Li-ion battery degradation. The agent automatically generates SQL queries against a real battery dataset, searches the web for external context when needed, and replies in clean, formatted Bahasa Indonesia.
 
-Built on **MiniMax-M2.1** (OpenAI-compatible API) with tooling for SQL execution, column exploration, self-correcting error handling, and observability via JSONL logs.
+Built on **MiniMax-M2.7** (OpenAI-compatible API) with a hybrid DB + web search strategy, SQL self-correction, and observability via JSONL logs.
 
 ---
 
 ## Features
 
-- **Conversational BI** — ask the database in natural English
-- **Tool-using agent** — the LLM decides when to run SQL and when to explore distinct column values
-- **Safe by design** — queries are validated (whitelist SELECT/WITH + dangerous-keyword blacklist), multi-statement queries are blocked
-- **Self-correcting** — when a query errors, the agent receives a `hint` in the response and fixes it
-- **Pretty CLI** — uses `rich` for result tables, syntax-highlighted SQL, spinners, and markdown rendering
-- **Observability** — every session is logged to JSONL (useful for debugging and evaluation)
-- **Retry with backoff** — exponential backoff for transient API errors
+- **Conversational battery research** — ask in natural language, get data-backed answers
+- **Hybrid knowledge** — DB-first for internal data, web search (Tavily) for benchmarks, definitions, and external context
+- **Tool-using agent** — LLM decides when to query SQL, explore column values, or search the web
+- **Safe by design** — only `SELECT`/`WITH` allowed; dangerous keywords blacklisted; multi-statement blocked
+- **Self-correcting** — query errors return a `hint` that the agent uses to fix and retry
+- **Pretty CLI** — `rich`-based tables, syntax-highlighted SQL, web result panels, spinners, markdown rendering
+- **Observability** — every session logged to JSONL
 
 ---
 
@@ -32,16 +32,25 @@ Built on **MiniMax-M2.1** (OpenAI-compatible API) with tooling for SQL execution
                                    |
                           tool_calls|
                                    v
-                              +---------+    SELECT     +--------------+
-                              |tools.py | ------------> | database.py  |
-                              |         | <------------ |  + SQLite    |
-                              +---------+   rows/hint   +--------------+
-                                   |
-                                   | log every event
-                                   v
-                              +---------+
-                              |logger.py| --> logs/*.jsonl
-                              +---------+
+                    +--------------+---------------+
+                    |              |               |
+               +----+----+   +----+----+   +-------+------+
+               |tools.py |   |tools.py |   | tools.py     |
+               |execute_ |   |get_     |   | web_search   |
+               |sql      |   |distinct |   |              |
+               +---------+   +---------+   +--------------+
+                    |                            |
+                    v                            v
+             +-----------+              +----------------+
+             |database.py|              | web_search.py  |
+             | + SQLite  |              | (Tavily API)   |
+             +-----------+              +----------------+
+                    |
+                    | log every event
+                    v
+               +---------+
+               |logger.py| --> logs/*.jsonl
+               +---------+
 ```
 
 ### File overview
@@ -49,28 +58,46 @@ Built on **MiniMax-M2.1** (OpenAI-compatible API) with tooling for SQL execution
 | File | Purpose |
 |---|---|
 | `main.py` | CLI entry point + interactive chat loop |
-| `agent.py` | Agent loop (call API -> handle tool calls -> loop until final answer) |
-| `tools.py` | Tool schema & dispatcher (`execute_sql`, `get_distinct_values`) |
+| `agent.py` | Agent loop (call API → handle tool calls → loop until final answer) |
+| `tools.py` | Tool schema & dispatcher (`execute_sql`, `get_distinct_values`, `web_search`) |
 | `database.py` | SQLite connection, query validation, error hints, schema introspection |
-| `setup_database.py` | Generates synthetic database (200 customers, 30 products, ~1500 orders) |
+| `web_search.py` | Tavily API integration for external web search |
+| `load_battery_data.py` | ETL: load Kaggle CSV → `data/battery.db` |
+| `quick_check.py` | Utility: explore raw CSV structure before running ETL |
 | `ui.py` | Presentation module (rich-based) — panels, tables, spinners, markdown |
 | `logger.py` | Per-session JSONL logger for observability |
-| `test_connection.py` | Smoke test for the MiniMax API |
-| `data/ecommerce.db` | SQLite database (generated by the setup script) |
+| `data/battery.db` | SQLite database (generated by `load_battery_data.py`) |
+| `data/raw/` | Raw CSV from Kaggle (gitignored) |
 | `logs/` | Per-session log files |
 
 ---
 
 ## Database Schema
 
-A mini e-commerce schema with 4 tables:
+A single-table schema from a real Li-ion battery degradation dataset:
 
-- **customers** (`customer_id`, `name`, `email`, `city`, `registered_at`) — 200 rows
-- **products** (`product_id`, `name`, `category`, `price`, `stock`) — 30 rows, 6 categories (Fashion, Elektronik, Makanan, Buku, Kecantikan, Olahraga)
-- **orders** (`order_id`, `customer_id`, `order_date`, `status`, `total_amount`) — ~1500 rows; statuses: `completed` / `shipped` / `pending` / `cancelled`
-- **order_items** (`item_id`, `order_id`, `product_id`, `quantity`, `unit_price`)
+**`battery_cycles`** — one row per charge/discharge cycle per battery
 
-Order period: 2024-01-01 to 2026-05-01. All prices are in Rupiah (integer).
+| Column | Type | Unit | Description |
+|---|---|---|---|
+| `id` | INTEGER | — | Primary key (autoincrement) |
+| `battery_id` | TEXT | — | Battery identifier (e.g. `B5`, `B6`) |
+| `cycle` | INTEGER | — | Cycle number |
+| `charge_current` | REAL | Ampere (A) | Current during charging |
+| `charge_voltage` | REAL | Volt (V) | Voltage during charging |
+| `charge_temperature` | REAL | °C | Temperature during charging |
+| `discharge_current` | REAL | Ampere (A) | Current during discharging |
+| `discharge_voltage` | REAL | Volt (V) | Voltage during discharging |
+| `discharge_temperature` | REAL | °C | Temperature during discharging |
+| `capacity` | REAL | Ah | Measured capacity this cycle |
+| `soh` | REAL | % | State of Health |
+| `rul` | INTEGER | cycles | Remaining Useful Life |
+
+**Domain glossary:**
+- **SOH** — State of Health: battery condition as % of nominal capacity
+- **RUL** — Remaining Useful Life: cycles remaining before End of Life
+- **EOL** — End of Life: conventionally SOH < 80%
+- **Knee point** — cycle where degradation suddenly accelerates
 
 ---
 
@@ -78,56 +105,64 @@ Order period: 2024-01-01 to 2026-05-01. All prices are in Rupiah (integer).
 
 ### 1. Prerequisites
 
-- Python 3.11+ (tested on Python 3.14)
-- MiniMax API key — get one at [minimax.io](https://www.minimax.io/)
+- Python 3.11+
+- MiniMax API key — [minimax.io](https://www.minimax.io/)
+- *(Optional)* Tavily API key for web search — [tavily.com](https://tavily.com) (free tier: 1,000 searches/month)
 
 ### 2. Install dependencies
 
 ```powershell
-# Create virtual environment
 py -m venv venv
 .\venv\Scripts\Activate.ps1
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
 Main dependencies:
-- `openai>=1.50.0` — SDK for MiniMax (uses the OpenAI-compatible endpoint)
+- `openai>=1.50.0` — SDK for MiniMax (OpenAI-compatible endpoint)
 - `python-dotenv>=1.0.0` — loads `.env` file
 - `rich>=13.7.0` — pretty CLI output
+- `pandas>=2.0.0` — CSV loading for ETL
+- `tavily-python>=0.5.0` — web search (optional)
 
 ### 3. Configure `.env`
 
-Create a `.env` file in the project root:
-
 ```env
 MINIMAX_API_KEY=sk-your-key-here
+TAVILY_API_KEY=tvly-xxxxx        # optional — enables web search
 ```
 
-### 4. Generate the database
+### 4. Download the dataset
+
+Download the battery degradation dataset from Kaggle and place it at:
+
+```
+data/raw/Battery_dataset.csv
+```
+
+*(Optional)* Explore the CSV structure first:
 
 ```powershell
-python setup_database.py
+python quick_check.py
+```
+
+### 5. Load the database
+
+```powershell
+python load_battery_data.py
 ```
 
 Output:
 ```
-Creating tables...
-Seeding customers...
-Seeding products...
-Seeding orders & order items...
-Database created successfully
-  customers     :    200 rows
-  products      :     30 rows
-  orders        :  1,500 rows
-  order_items   :  ~3,800 rows
-```
-
-### 5. (Optional) Test the API connection
-
-```powershell
-python test_connection.py
+🔋 BATTERY DATA ETL
+📂 Reading Battery_dataset.csv...
+   ✅ Loaded X,XXX rows × 11 columns
+🔍 Data quality checks:
+   • Batteries: ['B5', 'B6', ...]
+   • Cycles range: 1 – NNN
+   • SOH range: XX.XX% – 100.00%
+   • No duplicates on (battery_id, cycle)
+💾 Writing to data/battery.db...
+✅ ETL complete!
 ```
 
 ---
@@ -142,10 +177,11 @@ python main.py
 
 Then ask anything, for example:
 
-- *What is the total revenue for April 2026?*
-- *Which products sell best in the Fashion category?*
-- *Who are the top 5 customers by spend?*
-- *Compare revenue between Jakarta and Surabaya last year*
+- *Pada cycle berapa B5 mencapai EOL?*
+- *Bandingkan degradation rate semua battery*
+- *Apakah degradasi 0.12%/cycle itu normal untuk Li-ion?*
+- *Berapa rata-rata charge temperature B6 setelah cycle 100?*
+- *Apa itu knee point pada battery degradation?*
 
 ### CLI commands
 
@@ -158,27 +194,44 @@ Then ask anything, for example:
 
 ---
 
+## Hybrid Search Strategy
+
+The agent has two knowledge sources and uses them based on the question type:
+
+| Question type | Strategy |
+|---|---|
+| Data in our dataset (SOH, capacity, cycle, RUL, temperature) | `execute_sql` first |
+| Values/column names unknown | `get_distinct_values` before filtering |
+| External benchmarks, definitions, typical values, pricing | `web_search` |
+| "Is our data normal?" / internal + external context needed | Both: SQL → web → combine |
+
+When combining sources, the agent explicitly labels which data comes from our dataset vs. the web.
+
+Web search is **optional** — if `TAVILY_API_KEY` is not set, the agent operates in DB-only mode and shows a status message on startup.
+
+---
+
 ## Query Safety
 
 The database tool is **read-only** with defense-in-depth:
 
 1. **Whitelist** — only `SELECT` / `WITH` is allowed
 2. **Blacklist** — keywords `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE`, `CREATE`, `REPLACE`, `ATTACH`, `DETACH`, `PRAGMA`, `VACUUM` are rejected
-3. **No multi-statement** — `SELECT 1; SELECT 2` is rejected (checked with regex that strips string literals first)
+3. **No multi-statement** — `SELECT 1; SELECT 2` is rejected (regex that strips string literals first)
 4. **Identifier validation** — table/column names in `get_distinct_values` are validated against `^[a-zA-Z_][a-zA-Z0-9_]*$`
 
 ---
 
 ## Observability
 
-Every session is logged to `logs/session_<timestamp>_<id>.jsonl`. JSON Lines format (one event per line) — easy to analyze with `jq`, `pandas`, or any text editor.
+Every session is logged to `logs/session_<timestamp>_<id>.jsonl`. JSON Lines format — one event per line.
 
 Logged events:
 - `session_start` — when the agent is created
 - `user_message` — message from the user
 - `tool_call` — tool name + arguments + result preview (truncated to 500 chars)
 - `assistant_message` — final answer + cumulative token usage
-- `error` — when the API fails or the loop exceeds the iteration limit
+- `error` — API failure or iteration limit exceeded
 
 Quick analysis with PowerShell:
 
@@ -194,7 +247,7 @@ Key constants in `agent.py`:
 
 | Constant | Default | Description |
 |---|---|---|
-| `MODEL_NAME` | `MiniMax-M2.1` | Model in use |
+| `MODEL_NAME` | `MiniMax-M2.7` | Model in use |
 | `MAX_ITERATIONS` | `10` | Max agent loop iterations per question |
 | `MAX_RETRIES` | `3` | API retries on transient errors |
 | `INITIAL_BACKOFF` | `2` | Initial backoff seconds (exponential: 2, 4, 8) |
@@ -214,16 +267,22 @@ python ui.py
 ## Troubleshooting
 
 **`MINIMAX_API_KEY not found`**
--> Make sure `.env` exists in the project root and contains `MINIMAX_API_KEY=...`
+→ Make sure `.env` exists in the project root and contains `MINIMAX_API_KEY=...`
 
-**`Database not found at data/ecommerce.db`**
--> Run `python setup_database.py` first
+**`Database tidak ditemukan di data/battery.db`**
+→ Run `python load_battery_data.py` first
+
+**`Battery_dataset.csv tidak ditemukan`**
+→ Download the dataset from Kaggle and place it in `data/raw/`
+
+**Web search always returns "TAVILY_API_KEY tidak ditemukan"**
+→ Add `TAVILY_API_KEY=tvly-xxxxx` to `.env`. Sign up free at [tavily.com](https://tavily.com)
 
 **Repeated `APIError` / `RateLimitError`**
--> Check API credit and internet connection. The agent already retries 3x with backoff; if it keeps failing, the issue is on the provider side.
+→ Check API credit and internet connection. The agent retries 3× with exponential backoff
 
 **Agent gives wrong queries / loop doesn't converge**
--> Open the latest log file in `logs/`, look at which `tool_call` errored and what hint was returned. You can also `/reset` and rephrase the question.
+→ Open the latest log in `logs/`, check which `tool_call` errored and what hint was returned. Try `/reset` and rephrase the question
 
 ---
 
@@ -231,23 +290,26 @@ python ui.py
 
 ```
 bi-agent/
-+-- .env                 # API key (gitignored)
++-- .env                    # API keys (gitignored)
 +-- .gitignore
 +-- README.md
 +-- requirements.txt
-+-- main.py              # entry point
-+-- agent.py             # agent loop
-+-- tools.py             # tool definitions
-+-- database.py          # SQLite ops + validation
-+-- setup_database.py    # synthetic data generator
-+-- ui.py                # rich-based presentation
-+-- logger.py            # JSONL session logger
-+-- test_connection.py   # API smoke test
++-- main.py                 # entry point
++-- agent.py                # agent loop
++-- tools.py                # tool definitions (SQL + web search)
++-- database.py             # SQLite ops + validation
++-- web_search.py           # Tavily web search integration
++-- load_battery_data.py    # ETL: CSV → battery.db
++-- quick_check.py          # utility: explore CSV structure
++-- ui.py                   # rich-based presentation
++-- logger.py               # JSONL session logger
 +-- data/
-|   +-- ecommerce.db
+|   +-- battery.db          # SQLite database (generated)
+|   +-- raw/
+|       +-- Battery_dataset.csv  # raw Kaggle dataset (gitignored)
 +-- logs/
 |   +-- session_*.jsonl
-+-- venv/                # virtual environment (gitignored)
++-- venv/                   # virtual environment (gitignored)
 ```
 
 ---
